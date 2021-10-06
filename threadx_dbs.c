@@ -4,7 +4,7 @@
  * @Author: Jasper
  * @Date: 2021-09-19 15:26:28
  * @LastEditors: Jasper
- * @LastEditTime: 2021-10-06 10:44:38
+ * @LastEditTime: 2021-10-06 15:07:23
  * @FilePath: \FreeRTOS_Padding\app\threadx_dbs.c
  */
 #include "FreeRTOS.h"
@@ -775,6 +775,7 @@ static void vThreadx_task(void *pvParameters)
     char *ptr = NULL; /* 指向待发送的数据 */
     send[0] = 0xA5;
     send[1] = 0xA5;
+	memset(cons_queue,0,sizeof(cons_queue));//防止有垃圾数据的产生
     taskENTER_CRITICAL(); //进入临界区
     printf("thread#%d start\r\n", thread->thread_ID);
     printf("%s\r\n", thread->task);
@@ -787,11 +788,9 @@ static void vThreadx_task(void *pvParameters)
             if (rx_count == 10)                 /* 此时将数据发送给上位机 */
             {
                 ptr = send + 2;                                   /* 每次操作ptr之前 先要让ptr指向send+2 */
-                memcpy(send + 2, cons_queue, sizeof(cons_queue)); /* 发送缓冲区的前两个字节以0xA5 0XA5开头 */
-                ptr += sizeof(cons_queue);                        /* 指向最后一个数据的后一个字符 */
-                *ptr++ = '\r';
-                *ptr = '\n';                                                                                      /* 上位机以\r\n结尾 */
-                sprintf((char *)pre_send, "AT+CIPSEND=%d,%d\r\n", thread->thread_ID, sizeof(cons_queue) + 2 + 2); /* 发送的数据量= 数据+帧头+帧尾*/
+                sprintf(ptr,"%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n",cons_queue[0].key,cons_queue[1].key,cons_queue[2].key,cons_queue[3].key,cons_queue[4].key,
+																cons_queue[5].key,cons_queue[6].key,cons_queue[7].key,cons_queue[8].key,cons_queue[9].key);//这种方法是迫不得以，直接拷贝出现问题                                                                                  
+                sprintf((char *)pre_send, "AT+CIPSEND=%d,%d\r\n", thread->thread_ID, strlen(send)); /* 发送的数据量= 数据+帧头+帧尾*/
                 if (xSemaphoreTake(private_SEVER_thread_mutex, 500 / portTICK_PERIOD_MS) == pdTRUE)               /* 获取互斥量 */
                 {
                     myprintf3_DMA((char *)pre_send); /* 发送预数据区，针对esp8266客户端数据 */
@@ -799,7 +798,7 @@ static void vThreadx_task(void *pvParameters)
                     {
                         vTaskDelay(10 / portTICK_PERIOD_MS); /* 给esp8266模块准备的时间，一定要有 不然容易出现数据丢失的现象 */
                         USART3_IRQ_Disable();                /* 将服务器关闭 */
-                        myprintf3_DMA_cnt((char *)send, sizeof(cons_queue) + 2 + 2);
+                        myprintf3_DMA_cnt((char *)send, strlen(send));
                         if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE) //正常情况下10ms足以
                         {
                             USART3_IRQ_Enable(); /* 这就意味着服务器可以继续工作 */
@@ -848,16 +847,15 @@ static void recycle_task(void *pvParameters)
         }
     }
 }
-
 static const char esp82666_hello[] =
     {"      |--------------------------------------------------------------|\r\n\
       |Hello  Client                                                 |\r\n\
       |Attention:Just send the severce number that you what to me    |\r\n\
       |Sever have supported the severce which is display below:      |\r\n\
-      |1.start     2.bbb     3.ccc     4.ddd     5.eee     6.fff     |\r\n\
+      |1.start     2.bbbb:   3.cccc:   4.dddd:    5.eeee:    6.ffff: |\r\n\
       |When you have send the order,What you need to do is to wait   |\r\n\
       |The data type is key-value class. and the frame has head cheek|\r\n\
-      |Every data frame has '0XA5 0X5A' head cheak                   |\r\n\
+      |Every data frame has '0XA5 0XA5' head cheak                   |\r\n\
       |The Server is still to be improved,  Hope your join           |\r\n\
       |--------------------------------------------------------------|\r\n\
       |   This Light Server Framework is build by Jasper from JXUST  |\r\n\
