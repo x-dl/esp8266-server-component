@@ -854,7 +854,7 @@ static const char esp82666_hello[] =
       |Hello  Client                                                 |\r\n\
       |Attention:Just send the severce number that you what to me    |\r\n\
       |Sever have supported the severce which is display below:      |\r\n\
-      |1.intem     2.bbb     3.ccc     4.ddd     5.eee     6.fff     |\r\n\
+      |1.start     2.bbb     3.ccc     4.ddd     5.eee     6.fff     |\r\n\
       |When you have send the order,What you need to do is to wait   |\r\n\
       |The data type is key-value class. and the frame has head cheek|\r\n\
       |Every data frame has '0XA5 0X5A' head cheak                   |\r\n\
@@ -895,7 +895,7 @@ static const char esp8266_cmd[][40] = {
     /* 
         服务器能够提供的服务,服务名称在这里填写
      */
-    "1.intem",
+    "1.start",
     "2.bbb",
     "3.ccc",
     "4.ddd",
