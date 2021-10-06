@@ -25,3 +25,6 @@ The way to use it maybe a little difficult
 ## Initialization Process
 Assume that you have created the thread.
 to be continue...
+## Bug fixed Timeline
+### 2021.10.6
+Add the latest demo to the repo.
