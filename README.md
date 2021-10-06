@@ -28,3 +28,4 @@ to be continue...
 ## Bug fixed Timeline
 ### 2021.10.6
 Add the latest demo to the repo.
+Changed the way consumers copy data up to the bit machine
