@@ -27,5 +27,5 @@ Assume that you have created the thread.
 to be continue...
 ## Bug fixed Timeline
 ### 2021.10.6
-Add the latest demo to the repo.
-Changed the way consumers copy data up to the bit machine
+Add the latest demo to the repo.<br>
+Changed the way consumers copy data up to the bit machine,and fix the metaphysics bug
