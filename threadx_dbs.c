@@ -4,7 +4,7 @@
  * @Author: Jasper
  * @Date: 2021-09-19 15:26:28
  * @LastEditors: Jasper
- * @LastEditTime: 2021-10-06 08:21:08
+ * @LastEditTime: 2021-10-06 10:44:38
  * @FilePath: \FreeRTOS_Padding\app\threadx_dbs.c
  */
 #include "FreeRTOS.h"
@@ -24,11 +24,12 @@ static void BSP_SDMA(DMA_Stream_TypeDef *DMA_Streamx, u32 chx, u32 par, u32 mar,
 static void myprintf3(char *str);
 static void myprintf3_INT(char *str); //但是需要注意，字符串以/0结尾
 static void myprintf3_DMA(char *str);
+static void myprintf3_DMA_cnt(char *str, int cnt); //但是需要注意，字符串以/0结尾
 void USART3_IRQ_Enable(void);
 void USART3_IRQ_Disable(void);
 static void vThreadx_task(void *pvParameters);
 static void esp8266_task(void *pvParameters);
-static void senddata_task(void *pvParameters);
+static void recycle_task(void *pvParameters);
 static unsigned char reqid_get(char *recv); //获取请求id号 请求id来自于客户端
 /* 服务器组件中的信号量 */
 static SemaphoreHandle_t xSemaphore = NULL;
@@ -56,13 +57,18 @@ typedef struct idtask
 //任务优先级
 #define THREADX_TASK_PRIO (SEVER_TASK_PRIO - 1)
 //任务堆栈大小
-#define THREADX_STK_SIZE 128
+#define THREADX_STK_SIZE 200
 //任务优先级
 #define esp8266_TASK_PRIO (SEVER_TASK_PRIO - 1)
 //任务堆栈大小
 #define esp8266_STK_SIZE 128
+//任务优先级
+#define RECYCLE_TASK_PRIO (SEVER_TASK_PRIO - 2)
+//任务堆栈大小
+#define RECYCLE_STK_SIZE 128
 //任务句柄
 TaskHandle_t esp8266_Task_Handler;
+TaskHandle_t recycle_task_Handler;
 /* 服务器组件中相关全局变量 */
 static u8 USART_RX_BUF[USART_REC_LEN] = {0}; //接收缓冲,最大USART_REC_LEN个字节.
 static u16 USART_RX_CNT = 0;                 //接收状态标记
@@ -87,14 +93,14 @@ void Sever_task(void *pvParameters)
     xSemaphore = xSemaphoreCreateBinary();
     DMA_Transmit_semaphore = xSemaphoreCreateBinary();
     private_SEVER_thread_mutex = xSemaphoreCreateMutex();
-    /*     taskENTER_CRITICAL();                                //进入临界区
-    xTaskCreate((TaskFunction_t)senddata_task,           //任务函数
-                (const char *)"senddata",                //任务名称
-                (uint16_t)senddata_STK_SIZE,             //任务堆栈大小
-                (void *)IDArray,                         //传递给任务函数的参数
-                (UBaseType_t)senddata_TASK_PRIO,         //任务优先级
-                (TaskHandle_t *)&senddata_Task_Handler); //任务句柄
-    taskEXIT_CRITICAL();                                 //退出临界区 */
+    taskENTER_CRITICAL();                               //进入临界区
+    xTaskCreate((TaskFunction_t)recycle_task,           //任务函数
+                (const char *)"recycle",                //任务名称
+                (uint16_t)RECYCLE_STK_SIZE,             //任务堆栈大小
+                (void *)IDArray,                        //传递给任务函数的参数
+                (UBaseType_t)RECYCLE_TASK_PRIO,         //任务优先级
+                (TaskHandle_t *)&recycle_task_Handler); //任务句柄
+    taskEXIT_CRITICAL();                                //退出临界区
     if (private_SEVER_thread_mutex == NULL)
     {
         printf("private_SEVER_thread_mutex fail\r\n");
@@ -615,6 +621,16 @@ static void myprintf3_DMA(char *str) //但是需要注意，字符串以/0结尾
     BSP_SDMA(DMA1_Stream3, DMA_Channel_4, (u32)&USART3->DR, (u32)str, strlen(str)); //配置简化版的DMA
     DMA_Cmd(DMA1_Stream3, ENABLE);                                                  //开启DMA传输
 }
+static void myprintf3_DMA_cnt(char *str, int cnt) //但是需要注意，字符串以/0结尾
+{
+    USART_ClearFlag(USART3, USART_FLAG_TC); //防止出现stm32第一个字符丢失的现象
+    DMA_Cmd(DMA1_Stream3, DISABLE);         //关闭DMA传输
+    while (DMA_GetCmdStatus(DMA1_Stream3) != DISABLE)
+    {
+    }                                                                       //确保DMA可以被设置
+    BSP_SDMA(DMA1_Stream3, DMA_Channel_4, (u32)&USART3->DR, (u32)str, cnt); //配置简化版的DMA
+    DMA_Cmd(DMA1_Stream3, ENABLE);                                          //开启DMA传输
+}
 static void myprintf3_INT(char *str) //但是需要注意，字符串以/0结尾
 {
     USART_ClearFlag(USART3, USART_FLAG_TC);       //防止出现stm32第一个字符丢失的现象
@@ -750,60 +766,95 @@ typedef struct resource_pool_queue
 } reso_queue;
 static void vThreadx_task(void *pvParameters)
 {
+    extern xQueueHandle public_queue;
     IDtask *thread = (IDtask *)pvParameters;
-    reso_queue cons_queue;
-    char send[50] = {0};
+    char rx_count = 0;
+    reso_queue cons_queue[10] = {0};
     char pre_send[25] = {0};
+    char send[200] = {0};
+    char *ptr = NULL; /* 指向待发送的数据 */
+    send[0] = 0xA5;
+    send[1] = 0xA5;
     taskENTER_CRITICAL(); //进入临界区
     printf("thread#%d start\r\n", thread->thread_ID);
+    printf("%s\r\n", thread->task);
     taskEXIT_CRITICAL();
     while (1)
     {
-        extern xQueueHandle public_queue;
-        if (xQueuePeek(public_queue, &cons_queue, 200 / portTICK_PERIOD_MS) == pdTRUE)
+        if (xQueuePeek(public_queue, &cons_queue[rx_count++], 200 / portTICK_PERIOD_MS) == pdTRUE)
         {
-            vTaskDelay(1 / portTICK_PERIOD_MS);
-            sprintf((char *)pre_send, "AT+CIPSEND=%d,%d\r\n", thread->thread_ID, strlen((const char *)send));
-            sprintf(send, "%s\r\n", cons_queue.key);                                            /* 服务号长度一定为5 */
-            if (xSemaphoreTake(private_SEVER_thread_mutex, 500 / portTICK_PERIOD_MS) == pdTRUE) /* 获取互斥量 */
+            vTaskDelay(1 / portTICK_PERIOD_MS); /* 这个地方延时的目的在于让所有的消费者都能够获取到生产资料 */
+            if (rx_count == 10)                 /* 此时将数据发送给上位机 */
             {
-                myprintf3_DMA((char *)pre_send);
-                if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE)
+                ptr = send + 2;                                   /* 每次操作ptr之前 先要让ptr指向send+2 */
+                memcpy(send + 2, cons_queue, sizeof(cons_queue)); /* 发送缓冲区的前两个字节以0xA5 0XA5开头 */
+                ptr += sizeof(cons_queue);                        /* 指向最后一个数据的后一个字符 */
+                *ptr++ = '\r';
+                *ptr = '\n';                                                                                      /* 上位机以\r\n结尾 */
+                sprintf((char *)pre_send, "AT+CIPSEND=%d,%d\r\n", thread->thread_ID, sizeof(cons_queue) + 2 + 2); /* 发送的数据量= 数据+帧头+帧尾*/
+                if (xSemaphoreTake(private_SEVER_thread_mutex, 500 / portTICK_PERIOD_MS) == pdTRUE)               /* 获取互斥量 */
                 {
-                    vTaskDelay(10 / portTICK_PERIOD_MS); /* 给esp8266模块准备的时间，一定要有 不然容易出现数据丢失的现象 */
-                    USART3_IRQ_Disable();                /* 将服务器关闭 */
-                    myprintf3_DMA((char *)send);
-                    if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE) //正常情况下10ms足以
+                    myprintf3_DMA((char *)pre_send); /* 发送预数据区，针对esp8266客户端数据 */
+                    if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE)
                     {
-                        USART3_IRQ_Enable(); /* 这就意味着服务器可以继续工作 */
+                        vTaskDelay(10 / portTICK_PERIOD_MS); /* 给esp8266模块准备的时间，一定要有 不然容易出现数据丢失的现象 */
+                        USART3_IRQ_Disable();                /* 将服务器关闭 */
+                        myprintf3_DMA_cnt((char *)send, sizeof(cons_queue) + 2 + 2);
+                        if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE) //正常情况下10ms足以
+                        {
+                            USART3_IRQ_Enable(); /* 这就意味着服务器可以继续工作 */
+                        }
+                        else
+                        {
+                            printf("sever DMA_Transmit_semaphore error!!!\r\n");
+                        }
                     }
                     else
                     {
-                        printf("sever DMA_Transmit_semaphore error!!!\r\n");
+                        printf("threadx error");
+                        vTaskDelay(50 / portTICK_PERIOD_MS);
                     }
+                    xSemaphoreGive(private_SEVER_thread_mutex); /* 先归还信号量，然后再延时 */
                 }
                 else
                 {
-                    printf("threadx error");
-                    vTaskDelay(50 / portTICK_PERIOD_MS);
+                    printf(":%d->there is sb qiangzhan\r\n", thread->thread_ID);
+                    vTaskDelay(50);
                 }
-
-                xSemaphoreGive(private_SEVER_thread_mutex); /* 先归还信号量，然后再延时 */
-            }
-            else
-            {
-                printf(":%d->there is sb qiangzhan\r\n", thread->thread_ID);
-                vTaskDelay(50);
+                rx_count = 0; //清零
             }
         }
     }
 }
+/**
+ * @Function Name: recycle_task
+ * @Description: 回收任务
+ * @Param: 
+ * @Return: 
+ * @param {void} *pvParameters
+ */
+static void recycle_task(void *pvParameters)
+{
+    char recv[20] = {0};
+    while (1)
+    {
+
+        if (xQueueReceive(public_queue, recv, portMAX_DELAY) == pdTRUE)
+        {
+            //printf("done\r\n");
+        }
+        else
+        {
+        }
+    }
+}
+
 static const char esp82666_hello[] =
     {"      |--------------------------------------------------------------|\r\n\
       |Hello  Client                                                 |\r\n\
       |Attention:Just send the severce number that you what to me    |\r\n\
       |Sever have supported the severce which is display below:      |\r\n\
-      |1.aaa     2.bbb     3.ccc     4.ddd     5.eee     6.fff       |\r\n\
+      |1.intem     2.bbb     3.ccc     4.ddd     5.eee     6.fff     |\r\n\
       |When you have send the order,What you need to do is to wait   |\r\n\
       |The data type is key-value class. and the frame has head cheek|\r\n\
       |Every data frame has '0XA5 0X5A' head cheak                   |\r\n\
@@ -842,9 +893,9 @@ static const char esp8266_cmd[][40] = {
     ",CONNECT FAIL\r\n",
     ",CLOSED\r\n",
     /* 
-        服务器能够提供的服务
+        服务器能够提供的服务,服务名称在这里填写
      */
-    "1.aaa",
+    "1.intem",
     "2.bbb",
     "3.ccc",
     "4.ddd",
