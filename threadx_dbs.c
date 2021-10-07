@@ -461,7 +461,7 @@ static void BSP_TIM6_Init(void)
 
     NVIC_InitStructure.NVIC_IRQChannel = TIM6_DAC_IRQn;
     NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
-    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 8;
+    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 14;
     NVIC_Init(&NVIC_InitStructure);
     TIM_ITConfig(TIM6, TIM_IT_Update, ENABLE); //允许定时器6更新中断
     NVIC_EnableIRQ(TIM6_DAC_IRQn);             //使能TIM6中断
@@ -557,30 +557,79 @@ void USART3_IRQHandler(void)
             USART3->DR = (u8)*pc_SEVER_myprintf1++; //数据还没有发送完成
         }
     }
+    if (USART_GetFlagStatus(USART3, USART_FLAG_ORE) != RESET) /* This is fuck bug fuck st */
+    {
+        USART_ClearFlag(USART3, USART_FLAG_ORE);
+        USART_ReceiveData(USART3);
+    }
     SEGGER_SYSVIEW_RecordExitISR();
 }
 void TIM6_DAC_IRQHandler(void) //曾经的错误：void TIM6_DAC_IRQn (void),TIM6_IRQHandler
 {
+    static int count = 0, Tim_flag = pdFALSE;
     SEGGER_SYSVIEW_RecordEnterISR();
     if (TIM_GetITStatus(TIM6, TIM_IT_Update) == SET) //溢出中断
     {
-        if (isr_flag == pdTRUE)
+        if (Tim_flag == pdFALSE)
         {
-
-            if (USART_RX_CNT != 0)
+            if (isr_flag == pdTRUE) /* 如果串口被程序释放 */
             {
-                if (USART_RX_CNT != USART_RX_PRECNT)
+                if (flag == pdTRUE) //如果为真,开启服务器后的行为和开启前不一样
                 {
-                    USART_RX_PRECNT = USART_RX_CNT;
+                    if (USART_RX_CNT != 0)
+                    {
+                        if (USART_RX_CNT > 30) /* 说明此时线程正在运作，服务器的接收不需要开启 */
+                        {
+                            USART_RX_CNT = 0;
+                            USART_RX_PRECNT = 0;
+                            USART_ITConfig(USART3, USART_IT_RXNE, DISABLE); /* Enable USARTy Receive and Transmit interrupts */
+                            Tim_flag = pdTRUE;                              /* 是时候关闭串口失能 */
+                        }
+                        else
+                        {
+                            if (USART_RX_CNT != USART_RX_PRECNT)
+                            {
+                                USART_RX_PRECNT = USART_RX_CNT;
+                            }
+                            else
+                            {
+                                USART_RX_BUF[USART_RX_CNT] = '\0';
+                                USART_RX_PRECNT = 0;
+                                USART_RX_CNT = 0;
+                                isr_flag = pdFALSE;
+                                xSemaphoreGiveFromISR(xSemaphore, NULL);
+                            }
+                        }
+                    }
                 }
                 else
                 {
-                    USART_RX_BUF[USART_RX_CNT] = '\0';
-                    USART_RX_PRECNT = 0;
-                    USART_RX_CNT = 0;
-                    isr_flag = pdFALSE;
-                    xSemaphoreGiveFromISR(xSemaphore, NULL);
+                    if (USART_RX_CNT != 0)
+                    {
+                        if (USART_RX_CNT != USART_RX_PRECNT)
+                        {
+                            USART_RX_PRECNT = USART_RX_CNT;
+                        }
+                        else
+                        {
+                            USART_RX_BUF[USART_RX_CNT] = '\0';
+                            USART_RX_PRECNT = 0;
+                            USART_RX_CNT = 0;
+                            isr_flag = pdFALSE;
+                            xSemaphoreGiveFromISR(xSemaphore, NULL);
+                        }
+                    }
                 }
+            }
+        }
+        else
+        {
+            count++;
+            if (count == 50) /* 50ms之后重新开启 */
+            {
+                count = 0;
+                Tim_flag = pdFALSE;
+                USART_ITConfig(USART3, USART_IT_RXNE, ENABLE); /* Enable USARTy Receive and Transmit interrupts */
             }
         }
 
@@ -588,6 +637,7 @@ void TIM6_DAC_IRQHandler(void) //曾经的错误：void TIM6_DAC_IRQn (void),TIM6_IRQH
     }
     SEGGER_SYSVIEW_RecordExitISR();
 }
+
 void DMA1_Stream3_IRQHandler(void) // 串口3 DMA发送中断处理函数
 {
     SEGGER_SYSVIEW_RecordEnterISR();
@@ -778,11 +828,11 @@ static void vThreadx_task(void *pvParameters)
 	memset(cons_queue,0,sizeof(cons_queue));//防止有垃圾数据的产生
     taskENTER_CRITICAL(); //进入临界区
     printf("thread#%d start\r\n", thread->thread_ID);
-    printf("%s\r\n", thread->task);
+    //printf("%s\r\n", thread->task);
     taskEXIT_CRITICAL();
     while (1)
     {
-        if (xQueuePeek(public_queue, &cons_queue[rx_count++], 200 / portTICK_PERIOD_MS) == pdTRUE)
+        if (xQueuePeek(public_queue, &cons_queue[rx_count++], portMAX_DELAY / portTICK_PERIOD_MS) == pdTRUE)
         {
             vTaskDelay(1 / portTICK_PERIOD_MS); /* 这个地方延时的目的在于让所有的消费者都能够获取到生产资料 */
             if (rx_count == 10)                 /* 此时将数据发送给上位机 */
@@ -796,12 +846,10 @@ static void vThreadx_task(void *pvParameters)
                     myprintf3_DMA((char *)pre_send); /* 发送预数据区，针对esp8266客户端数据 */
                     if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE)
                     {
-                        vTaskDelay(10 / portTICK_PERIOD_MS); /* 给esp8266模块准备的时间，一定要有 不然容易出现数据丢失的现象 */
-                        USART3_IRQ_Disable();                /* 将服务器关闭 */
+                        vTaskDelay(10 / portTICK_PERIOD_MS); /* 给esp8266模块准备的时间，需要它返回OK 一定要有 不然容易出现数据丢失的现象 */
                         myprintf3_DMA_cnt((char *)send, strlen(send));
                         if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE) //正常情况下10ms足以
                         {
-                            USART3_IRQ_Enable(); /* 这就意味着服务器可以继续工作 */
                         }
                         else
                         {
