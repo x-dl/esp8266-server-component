@@ -30,5 +30,5 @@ to be continue...
 Add the latest demo to the repo.<br>
 Changed the way consumers copy data up to the bit machine,and fix the metaphysics bug.
 ### 2021.10.12
-fix the predata send error,before just wait for esp8266 for 10ms.<br>
-but now sever must have received SEND OK to do the next
+Fix the predata send error,before just wait for esp8266 for 10ms.<br>
+But now sever must have received SEND OK to do the next
