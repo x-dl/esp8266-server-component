@@ -76,6 +76,7 @@ static u16 USART_RX_PRECNT = 0;              //接收状态标记
 static u8 flag = pdFALSE;                    //服务器的状态标志，默认服务器是没有准备好的
 static u8 isr_flag = pdTRUE;
 static unsigned char *pc_SEVER_myprintf1 = NULL;
+static unsigned char txready_flag = pdFALSE;
 void Sever_task(void *pvParameters)
 {
     unsigned char *ucpsend_item = USART_RX_BUF;
@@ -202,39 +203,45 @@ void Sever_task(void *pvParameters)
                             Current_IDtask += (*ucpsend_item - '0'); /* 记录此时需要服务的客户端 */
                             Current_IDtask->client_status = pdTRUE;  /* 客户端进行注册 */
                             sprintf((char *)ucpsend_item, "AT+CIPSEND=%c,%d\r\n", *ucpsend_item, strlen((const char *)esp82666_hello));
-                            xSemaphoreTake(private_SEVER_thread_mutex, 200 / portTICK_PERIOD_MS); /* 获取互斥量 */
-                            myprintf3_DMA((char *)ucpsend_item);
-                            if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE)
+                            if (xSemaphoreTake(private_SEVER_thread_mutex, 200 / portTICK_PERIOD_MS) == pdTRUE) /* 获取互斥量 */
                             {
-                                if (xSemaphoreTake(xSemaphore, 100 / portTICK_PERIOD_MS) == pdTRUE) //接受来自串口3的数据
+                                myprintf3_DMA((char *)ucpsend_item);
+                                if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE)
                                 {
-                                    if (strstr((const char *)ucpsend_item, (const char *)"OK") != NULL) //可以发送数据了
+                                    if (xSemaphoreTake(xSemaphore, 100 / portTICK_PERIOD_MS) == pdTRUE) //接受来自串口3的数据
                                     {
-                                        USART3_IRQ_Disable();                  //发送数据之前先把串口3接受中断失能
-                                        myprintf3_DMA((char *)esp82666_hello); //向客户端发送服务器可提供的服务
-
-                                        if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE) //正常情况下10ms足以
+                                        if (strstr((const char *)ucpsend_item, (const char *)"OK") != NULL) //可以发送数据了
                                         {
-                                            vTaskDelay(200 / portTICK_PERIOD_MS);
-                                            USART3_IRQ_Enable(); //先延时100ms,然后发送数据之前先把串口3接受中断使能
+                                            USART3_IRQ_Disable();                  //发送数据之前先把串口3接受中断失能
+                                            myprintf3_DMA((char *)esp82666_hello); //向客户端发送服务器可提供的服务
+
+                                            if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE) //正常情况下10ms足以
+                                            {
+                                                vTaskDelay(200 / portTICK_PERIOD_MS);
+                                                USART3_IRQ_Enable(); //先延时100ms,然后发送数据之前先把串口3接受中断使能
+                                            }
+                                            else
+                                            {
+                                                printf("sever DMA_Transmit_semaphore error!!!\r\n");
+                                            }
                                         }
                                         else
                                         {
-                                            printf("sever DMA_Transmit_semaphore error!!!\r\n");
+                                            printf("accept OK error\r\n");
                                         }
+                                        isr_flag = pdTRUE; //串口可以再次获取数据
                                     }
-                                    else
-                                    {
-                                        printf("accept OK error\r\n");
-                                    }
-                                    isr_flag = pdTRUE; //串口可以再次获取数据
                                 }
+                                else
+                                {
+                                    printf("accept client first error\r\n");
+                                }
+                                xSemaphoreGive(private_SEVER_thread_mutex); /* 归还互斥量 */
                             }
                             else
                             {
-                                printf("accept client first error\r\n");
+                                printf("sever->semap is taken by other\r\n");
                             }
-                            xSemaphoreGive(private_SEVER_thread_mutex); /* 归还互斥量 */
                         }
                         break;
                         case 2:
@@ -380,6 +387,14 @@ void Sever_task(void *pvParameters)
                         }
                         break;
                         case 10:
+                            if (txready_flag == pdTRUE)
+                            {
+                                if (strstr(USART_RX_BUF, "SEND OK") != NULL)
+                                {
+                                    txready_flag = pdFALSE; /* 告诉线程，你现在可以发送数据了 */
+                                }
+                            }
+                            //printf("\r\n:\r\n%s\r\n:\r\n", USART_RX_BUF);
                             //printf("can not find the command \r\n"); /* 最后一种情况触发是正常现象 */
                             break;
                         default:
@@ -837,16 +852,32 @@ static void vThreadx_task(void *pvParameters)
             vTaskDelay(1 / portTICK_PERIOD_MS); /* 这个地方延时的目的在于让所有的消费者都能够获取到生产资料 */
             if (rx_count == 10)                 /* 此时将数据发送给上位机 */
             {
-                ptr = send + 2;                                   /* 每次操作ptr之前 先要让ptr指向send+2 */
-                sprintf(ptr,"%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n",cons_queue[0].key,cons_queue[1].key,cons_queue[2].key,cons_queue[3].key,cons_queue[4].key,
-																cons_queue[5].key,cons_queue[6].key,cons_queue[7].key,cons_queue[8].key,cons_queue[9].key);//这种方法是迫不得以，直接拷贝出现问题                                                                                  
+                ptr = send + 2; /* 每次操作ptr之前 先要让ptr指向send+2 */
+                sprintf(ptr, "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n", cons_queue[0].key, cons_queue[1].key, cons_queue[2].key, cons_queue[3].key, cons_queue[4].key,
+                        cons_queue[5].key, cons_queue[6].key, cons_queue[7].key, cons_queue[8].key, cons_queue[9].key); //这种方法是迫不得以，直接拷贝出现问题
+                ptr = strstr(ptr, "\n");
+                if (ptr == NULL) /* to make pre data more safe */
+                {
+                    printf("pre data error\r\n");
+                }
+                else
+                {
+                    ptr++;
+                    *ptr = '\0';
+                }
+                //printf("\n--%d--\n", strlen(send));
                 sprintf((char *)pre_send, "AT+CIPSEND=%d,%d\r\n", thread->thread_ID, strlen(send)); /* 发送的数据量= 数据+帧头+帧尾*/
                 if (xSemaphoreTake(private_SEVER_thread_mutex, 500 / portTICK_PERIOD_MS) == pdTRUE)               /* 获取互斥量 */
                 {
                     myprintf3_DMA((char *)pre_send); /* 发送预数据区，针对esp8266客户端数据 */
                     if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE)
                     {
-                        vTaskDelay(10 / portTICK_PERIOD_MS); /* 给esp8266模块准备的时间，需要它返回OK 一定要有 不然容易出现数据丢失的现象 */
+                        txready_flag = pdTRUE;
+                        while (txready_flag == pdFALSE) /* 不在给予esp8266准备的时间，只有接收到正确的数据才能够进行下一步，否则不进行 */
+                        {
+                            vTaskDelay(2 / portTICK_PERIOD_MS);
+                        }
+                        //vTaskDelay(10 / portTICK_PERIOD_MS); /* 给esp8266模块准备的时间，需要它返回OK 一定要有 不然容易出现数据丢失的现象 */
                         myprintf3_DMA_cnt((char *)send, strlen(send));
                         if (xSemaphoreTake(DMA_Transmit_semaphore, 100 / portTICK_PERIOD_MS) == pdTRUE) //正常情况下10ms足以
                         {
