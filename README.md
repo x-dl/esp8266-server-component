@@ -1,8 +1,9 @@
 # Server Component 🚀
 ## Preface
-This server component is used for system monitoring and data analysis. <br>
-And it seems that just add a thread to your existing embedded platform,The impact on the behavior of the original embedded platform is minimal.<br>
-And greatly improve your understanding of embedded systems, giving you a different vision.<br>
+This server component is used for system monitoring and data analysis,
+
+and better for team communication <br>
+And it seems that just add a thread to your existing embedded platform,The impact on the behavior of the original embedded platform is minimal.<br>Greatly improve your understanding of embedded systems, giving you a different vision.<br>
 
 ## Purpose
 
