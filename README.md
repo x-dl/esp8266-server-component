@@ -3,6 +3,11 @@
 This server component is used for system monitoring and data analysis. <br>
 And it seems that just add a thread to your existing embedded platform,The impact on the behavior of the original embedded platform is minimal.<br>
 And greatly improve your understanding of embedded systems, giving you a different vision.<br>
+
+## Purpose
+
+
+
 #### Attention:Rar file contains examples of development boards based on spot atom Explorer, which can be run directly.But its context is not the latest version
 ## Architecture
 ![](https://gitee.com/xudangling_admin/pic-go/raw/master/20211006155511.png)
