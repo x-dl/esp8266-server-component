@@ -6,7 +6,7 @@ And greatly improve your understanding of embedded systems, giving you a differe
 
 ## Purpose
 
-
+![purpose.png](https://github.com/x-dl/esp8266-server-component/blob/main/picture/purpose.png?raw=true)
 
 #### Attention:Rar file contains examples of development boards based on spot atom Explorer, which can be run directly.But its context is not the latest version
 ## Architecture
